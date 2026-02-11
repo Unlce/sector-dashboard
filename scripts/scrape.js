@@ -55,56 +55,68 @@ const SECTOR_NAMES = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const fetchYahooData = async (code) => {
-  const url = `https://finance.yahoo.co.jp/quote/${code}.T`;
+const fetchIRBankData = async (code) => {
+  // IR BANK: 结构最简单的硬核数据源
+  const url = `https://irbank.net/${code}`;
   
   try {
     const { data } = await axios.get(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
-      timeout: 15000
+      timeout: 20000 
     });
-    
-    // 名字提取 (使用 Cheerio)
     const $ = cheerio.load(data);
-    let stockName = $('h1').text().trim() || code;
-    stockName = stockName.replace(code, '').replace('.T', '').trim();
 
-    // 🔴 核心数据提取 (使用正则表达式 - Regex Sniper)
-    // 不再依赖 DOM 结构，直接在 HTML 文本里找 "PBR...倍"
-    // Yahoo 的 HTML 里，PBR 后面一定跟着数值和 "倍" 字，而 EPS 后面是 "円"，所以不会搞混。
-    
-    const html = data;
-    
-    // 寻找 PBR (匹配示例: >PBR<... 1.23倍)
-    // [^<]*? 意思是中间可能有一些标签或空格
-    const pbrMatch = html.match(/>PBR.*?([0-9,.]+)倍/);
-    const pbr = pbrMatch ? parseFloat(pbrMatch[1].replace(/,/g, '')) : null;
+    // 1. 获取名字 
+    // IR BANK 的 Title 通常是 "8058 三菱商事..."
+    let title = $('h1').text();
+    let stockName = title.split(' ')[1] || title.split('　')[1] || code;
 
-    // 寻找 PER
-    const perMatch = html.match(/>PER.*?([0-9,.]+)倍/);
-    const per = perMatch ? parseFloat(perMatch[1].replace(/,/g, '')) : null;
+    // 2. 抓取数据 (基于 Table 结构)
+    // IR BANK 的数据非常规整，通常在一个 id="v_data" 或类似的表格里
+    let pbr = null, per = null, yieldVal = null;
 
-    // 寻找 利回り (匹配示例: >配当利回り<... 3.45%)
-    const yieldMatch = html.match(/>配当利回り.*?([0-9,.]+)%/);
-    const yieldVal = yieldMatch ? parseFloat(yieldMatch[1].replace(/,/g, '')) : null;
+    // 遍历所有的 th (表头) 找对应的值
+    $('th').each((i, el) => {
+      const label = $(el).text().trim();
+      
+      // PBR 查找
+      if (label === 'PBR' || label === 'PBR(実績)') {
+        // IR BANK 的数值通常在 th 的下一个 td 里
+        const val = $(el).next('td').text().replace('倍', '').trim();
+        const num = parseFloat(val);
+        if (!isNaN(num)) pbr = num;
+      }
 
-    // 趋势 (Yahoo 绿色是跌，红色是涨)
+      // PER 查找
+      if (label === 'PER' || label === 'PER(予)') {
+        const val = $(el).next('td').text().replace('倍', '').trim();
+        const num = parseFloat(val);
+        if (!isNaN(num)) per = num;
+      }
+
+      // 配当利回り 查找
+      if (label === '配当利回り' || label === '配当利回り(予)') {
+        const val = $(el).next('td').text().replace('%', '').trim();
+        const num = parseFloat(val);
+        if (!isNaN(num)) yieldVal = num;
+      }
+    });
+
+    // 趋势判定 (IR BANK 首页没有明显的涨跌幅，暂时根据 yield 反推或设为 flat)
     let trend = 'flat';
-    if (html.includes('priceChangeText_green')) trend = 'down';
-    if (html.includes('priceChangeText_red')) trend = 'up';
 
     return { name: stockName, pbr, per, yield: yieldVal, trend };
 
   } catch (error) {
-    console.error(`⚠️ Error Yahoo ${code}: ${error.message}`);
+    console.error(`⚠️ Error IRBANK ${code}: ${error.message}`);
     return null;
   }
 };
 
 const run = async () => {
-  console.log("🚀 Starting Scrape (Regex Sniper Mode)...");
+  console.log("🚀 Starting Scrape (Source: IR BANK)...");
   const results = [];
 
   for (const [sectorCode, stocks] of Object.entries(SECTOR_TARGETS)) {
@@ -113,13 +125,15 @@ const run = async () => {
     const stockDetails = [];
 
     for (const stockCode of stocks) {
-      const data = await fetchYahooData(stockCode);
-      await sleep(1500); 
+      const data = await fetchIRBankData(stockCode);
+      await sleep(2000); // 礼貌爬取
 
       if (data) {
-        // 打印出来确认一下
-        const pbrStr = data.pbr !== null ? data.pbr : "-";
-        console.log(`   - ${stockCode} ${data.name}: PBR ${pbrStr}x | PER ${data.per}x | Yield ${data.yield}%`);
+        // 简单验证：PBR 不可能超过 100 (除非是疯妖股)
+        // 如果抓错，显示告警
+        const pbrDisplay = data.pbr > 100 ? `⚠️${data.pbr}` : data.pbr;
+        
+        console.log(`   - ${stockCode} ${data.name}: PBR ${pbrDisplay}x | PER ${data.per}x | Yield ${data.yield}%`);
         stockDetails.push({ code: stockCode, ...data });
       } else {
         console.log(`   - ${stockCode}: Failed`);
