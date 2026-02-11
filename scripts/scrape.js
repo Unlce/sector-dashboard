@@ -55,71 +55,91 @@ const SECTOR_NAMES = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const fetchStockData = async (code) => {
-  const url = `https://kabutan.jp/stock/?code=${code}`;
+const fetchMinkabuData = async (code) => {
+  // 切换源：Minkabu (みんかぶ)
+  const url = `https://minkabu.jp/stock/${code}`;
   try {
     const { data } = await axios.get(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://kabutan.jp/'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://google.com/'
       },
-      timeout: 10000 
+      timeout: 15000
     });
     const $ = cheerio.load(data);
 
-    // 抓取公司名称 (通常在 h2 或 h3 标签里，例如 "1332 ニッスイ")
-    let rawName = $('div.si_i1_1 h2').text().trim();
-    // 去掉代码和空格，只留名字 (例如 "1332 ニッスイ" -> "ニッスイ")
-    let stockName = rawName.replace(code, '').trim() || code;
-
+    // 1. 获取股票名称 (通常在 p.md_stockBoard_stockName 或类似的结构)
+    // Minkabu 结构： <p class="md_stockBoard_stockName">ニッスイ</p>
+    let stockName = $('.md_stockBoard_stockName').text().trim() || code;
+    
+    // 2. 智能抓取数据
+    // Minkabu 的数据通常在表格中，th是标签，td是数值
+    // 我们遍历所有 th，找到对应的 td
     let pbr = null, per = null, yieldVal = null;
-    $('td').each((i, el) => {
-      const text = $(el).text().trim();
-      if (text === 'PBR(実績)') {
-        const val = $(el).next().text().replace('倍', '').trim();
-        if (val && !isNaN(val)) pbr = parseFloat(val);
+
+    $('th').each((i, el) => {
+      const label = $(el).text().trim();
+      const val = $(el).next('td').text().trim(); // 获取紧邻的 td
+
+      if (label.includes('PBR') && label.includes('実績')) {
+        const num = parseFloat(val.replace('倍', '').replace(',', ''));
+        if (!isNaN(num)) pbr = num;
       }
-      if (text === 'PER(予)') {
-        const val = $(el).next().text().replace('倍', '').trim();
-        if (val && !isNaN(val)) per = parseFloat(val);
+      if (label.includes('PER') && label.includes('予')) {
+        const num = parseFloat(val.replace('倍', '').replace(',', ''));
+        if (!isNaN(num)) per = num;
       }
-      if (text === '配当利回り') {
-        const val = $(el).next().text().replace('%', '').trim();
-        if (val && !isNaN(val)) yieldVal = parseFloat(val);
+      if (label.includes('配当利回り')) {
+        const num = parseFloat(val.replace('%', '').replace(',', ''));
+        if (!isNaN(num)) yieldVal = num;
       }
     });
 
+    // 3. 趋势判断 (前日比)
     let trend = 'flat';
-    const change = $('span.kabuka_val_tod').first().text(); 
-    if ($('.d_up').length > 0 || change.includes('+')) trend = 'up';
-    if ($('.d_down').length > 0 || change.includes('-') || change.includes('▲')) trend = 'down';
+    const changeText = $('.stock_price_change').text(); // 例: +15 (+1.2%)
+    if (changeText.includes('+')) trend = 'up';
+    if (changeText.includes('-') || changeText.includes('▼')) trend = 'down';
 
     return { name: stockName, pbr, per, yield: yieldVal, trend };
 
   } catch (error) {
-    console.error(`⚠️ Error fetching ${code}: ${error.message}`);
-    return null;
+    console.error(`⚠️ Error fetching ${code} from Minkabu: ${error.message}`);
+    // 如果 Minkabu 也失败，尝试 Yahoo Finance 作为备用 (简单逻辑)
+    return null; 
   }
 };
 
 const run = async () => {
-  console.log("🚀 Starting Individual Stock Scrape...");
+  console.log("🚀 Starting Scrape (Source: Minkabu)...");
   const results = [];
 
   for (const [sectorCode, stocks] of Object.entries(SECTOR_TARGETS)) {
-    console.log(`\n📂 Sector ${sectorCode}...`);
+    console.log(`\n📂 Sector ${sectorCode} (${SECTOR_NAMES[sectorCode]})...`);
     
     const stockDetails = [];
 
     for (const stockCode of stocks) {
-      const data = await fetchStockData(stockCode);
-      await sleep(2000); // 慢速抓取
+      const data = await fetchMinkabuData(stockCode);
+      // Minkabu 比较宽松，但还是加一点延迟
+      await sleep(1500); 
 
       if (data) {
-        console.log(`   - ${stockCode} ${data.name}: PBR ${data.pbr}`);
+        // 如果抓取失败（null），显示 -
+        const pbrStr = data.pbr !== null ? data.pbr : "-";
+        console.log(`   - ${stockCode} ${data.name}: PBR ${pbrStr}`);
+        
         stockDetails.push({
           code: stockCode,
           ...data
+        });
+      } else {
+        console.log(`   - ${stockCode}: Failed to fetch`);
+        // 即使失败也推入一个空对象，保持表格结构完整
+        stockDetails.push({
+          code: stockCode,
+          name: stockCode, // 暂时用代码代替名字
+          pbr: null, per: null, yield: null, trend: 'flat'
         });
       }
     }
@@ -127,7 +147,7 @@ const run = async () => {
     results.push({
       code: sectorCode,
       name: SECTOR_NAMES[sectorCode],
-      stocks: stockDetails // 这里不再是平均值，而是数组
+      stocks: stockDetails
     });
   }
 
