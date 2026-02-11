@@ -4,109 +4,140 @@ import { fileURLToPath } from 'url';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
-// 【核心策略】龙头股代理列表
-// 我们抓取每个行业最具代表性的一只股票，作为该行业的"体温计"
-const SECTOR_LEADERS = [
-  { code: "1332", sectorCode: "0251", name: "水産・農林業" }, // ニッスイ
-  { code: "1605", sectorCode: "0253", name: "鉱業" },       // INPEX
-  { code: "1928", sectorCode: "0254", name: "建設業" },     // 積水ハウス (你的关注股)
-  { code: "2802", sectorCode: "0256", name: "食料品" },     // 味の素
-  { code: "3402", sectorCode: "0255", name: "繊維製品" },   // 東レ
-  { code: "3861", sectorCode: "0257", name: "パルプ・紙" }, // 王子HD
-  { code: "4063", sectorCode: "0258", name: "化学" },       // 信越化学
-  { code: "4502", sectorCode: "0259", name: "医薬品" },     // 武田薬品
-  { code: "5020", sectorCode: "0260", name: "石油・石炭" }, // ENEOS
-  { code: "5108", sectorCode: "0261", name: "ゴム製品" },   // ブリヂストン
-  { code: "5201", sectorCode: "0262", name: "ガラス土石" }, // AGC
-  { code: "5401", sectorCode: "0263", name: "鉄鋼" },       // 日本製鉄
-  { code: "5713", sectorCode: "0264", name: "非鉄金属" },   // 住友鉱
-  { code: "5938", sectorCode: "0265", name: "金属製品" },   // LIXIL
-  { code: "6301", sectorCode: "0266", name: "機械" },       // コマツ
-  { code: "6501", sectorCode: "0267", name: "電気機器" },   // 日立
-  { code: "7203", sectorCode: "0268", name: "輸送用機器" }, // トヨタ
-  { code: "7741", sectorCode: "0269", name: "精密機器" },   // HOYA
-  { code: "7974", sectorCode: "0270", name: "その他製品" }, // 任天堂
-  { code: "9503", sectorCode: "0271", name: "電気・ガス" }, // 関西電力 (你的关注股)
-  { code: "9020", sectorCode: "0272", name: "陸運業" },     // JR東日本
-  { code: "9101", sectorCode: "0273", name: "海運業" },     // 日本郵船
-  { code: "9202", sectorCode: "0274", name: "空運業" },     // ANA (你的持仓)
-  { code: "9301", sectorCode: "0275", name: "倉庫・運輸" }, // 三菱倉庫
-  { code: "9432", sectorCode: "0276", name: "情報・通信" }, // NTT
-  { code: "8058", sectorCode: "0277", name: "卸売業" },     // 三菱商事 (你的目标股)
-  { code: "3382", sectorCode: "0278", name: "小売業" },     // セブン&アイ (你的持仓)
-  { code: "8306", sectorCode: "0279", name: "銀行業" },     // 三菱UFJ
-  { code: "8604", sectorCode: "0280", name: "証券商品" },   // 野村HD
-  { code: "8766", sectorCode: "0281", name: "保険業" },     // 東京海上
-  { code: "8591", sectorCode: "0282", name: "その他金融" }, // オリックス
-  { code: "8801", sectorCode: "0283", name: "不動産業" },   // 三井不動産
-  { code: "6098", sectorCode: "0284", name: "サービス業" }  // リクルート
-];
+// 【3股龙头配置】
+const SECTOR_TARGETS = {
+  "0251": ["1332", "1377", "1379"], // 水産・農林
+  "0253": ["1605", "1662", "1514"], // 鉱業
+  "0254": ["1928", "1801", "1925"], // 建設
+  "0256": ["2802", "2503", "2914"], // 食料品
+  "0255": ["3402", "3407", "3405"], // 繊維
+  "0257": ["3861", "3863", "3864"], // パルプ
+  "0258": ["4063", "4188", "6981"], // 化学
+  "0259": ["4502", "4503", "4568"], // 医薬品
+  "0260": ["5020", "5019", "5021"], // 石油
+  "0261": ["5108", "5110", "5105"], // ゴム
+  "0262": ["5201", "5233", "5333"], // ガラス
+  "0263": ["5401", "5411", "5406"], // 鉄鋼
+  "0264": ["5713", "5711", "5714"], // 非鉄
+  "0265": ["5938", "5929", "5901"], // 金属
+  "0266": ["6301", "6367", "6326"], // 機械
+  "0267": ["6501", "6503", "6758"], // 電気機器
+  "0268": ["7203", "7267", "7201"], // 輸送用
+  "0269": ["7741", "4543", "7733"], // 精密
+  "0270": ["7974", "7911", "7912"], // その他製品
+  "0271": ["9501", "9503", "9531"], // 電気ガス
+  "0272": ["9020", "9021", "9022"], // 陸運
+  "0273": ["9101", "9104", "9107"], // 海運
+  "0274": ["9201", "9202", "9232"], // 空運
+  "0275": ["9301", "9064", "9302"], // 倉庫
+  "0276": ["9432", "9433", "9984"], // 通信
+  "0277": ["8058", "8031", "8001"], // 卸売 (商社)
+  "0278": ["3382", "9983", "8267"], // 小売
+  "0279": ["8306", "8316", "8411"], // 銀行
+  "0280": ["8604", "8601", "8697"], // 証券
+  "0281": ["8766", "8725", "8630"], // 保険
+  "0282": ["8591", "8570", "8473"], // その他金融
+  "0283": ["8801", "8802", "8830"], // 不動産
+  "0284": ["6098", "4324", "4755"]  // サービス
+};
 
-// 延时函数，防止请求太快被 Kabutan 封 IP
+const SECTOR_NAMES = {
+  "0251": "水産・農林業", "0253": "鉱業", "0254": "建設業", "0256": "食料品",
+  "0255": "繊維製品", "0257": "パルプ・紙", "0258": "化学", "0259": "医薬品",
+  "0260": "石油・石炭", "0261": "ゴム製品", "0262": "ガラス土石", "0263": "鉄鋼",
+  "0264": "非鉄金属", "0265": "金属製品", "0266": "機械", "0267": "電気機器",
+  "0268": "輸送用機器", "0269": "精密機器", "0270": "その他製品", "0271": "電気・ガス",
+  "0272": "陸運業", "0273": "海運業", "0274": "空運業", "0275": "倉庫・運輸",
+  "0276": "情報・通信", "0277": "卸売業", "0278": "小売業", "0279": "銀行業",
+  "0280": "証券商品", "0281": "保険業", "0282": "その他金融", "0283": "不動産業",
+  "0284": "サービス業"
+};
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const fetchStockData = async (stockCode) => {
-  const url = `https://kabutan.jp/stock/?code=${stockCode}`;
+const fetchStockData = async (code) => {
+  const url = `https://kabutan.jp/stock/?code=${code}`;
   try {
     const { data } = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://kabutan.jp/'
+      },
+      timeout: 10000 
     });
     const $ = cheerio.load(data);
 
-    // 抓取 PBR (kabutan 页面结构相对固定，但需要容错)
-    // 通常在 #stockinfo_i3 区域
-    let pbr = $('#stockinfo_i3 table tbody tr:nth-child(1) td:nth-child(4)').text().replace('倍', '');
-    let per = $('#stockinfo_i3 table tbody tr:nth-child(1) td:nth-child(2)').text().replace('倍', '');
-    let yieldVal = $('#stockinfo_i3 table tbody tr:nth-child(3) td:nth-child(2)').text().replace('%', '');
-    
-    // 抓取股价涨跌 (判断 Trend)
-    // 查找 "前日比" 的颜色或符号
-    const changeText = $('.kobetsu_data_table1 tbody tr:nth-child(2) td:nth-child(2)').text();
+    // 抓取公司名称 (通常在 h2 或 h3 标签里，例如 "1332 ニッスイ")
+    let rawName = $('div.si_i1_1 h2').text().trim();
+    // 去掉代码和空格，只留名字 (例如 "1332 ニッスイ" -> "ニッスイ")
+    let stockName = rawName.replace(code, '').trim() || code;
+
+    let pbr = null, per = null, yieldVal = null;
+    $('td').each((i, el) => {
+      const text = $(el).text().trim();
+      if (text === 'PBR(実績)') {
+        const val = $(el).next().text().replace('倍', '').trim();
+        if (val && !isNaN(val)) pbr = parseFloat(val);
+      }
+      if (text === 'PER(予)') {
+        const val = $(el).next().text().replace('倍', '').trim();
+        if (val && !isNaN(val)) per = parseFloat(val);
+      }
+      if (text === '配当利回り') {
+        const val = $(el).next().text().replace('%', '').trim();
+        if (val && !isNaN(val)) yieldVal = parseFloat(val);
+      }
+    });
+
     let trend = 'flat';
-    if (changeText.includes('+')) trend = 'up';
-    if (changeText.includes('-') || changeText.includes('▲')) trend = 'down';
+    const change = $('span.kabuka_val_tod').first().text(); 
+    if ($('.d_up').length > 0 || change.includes('+')) trend = 'up';
+    if ($('.d_down').length > 0 || change.includes('-') || change.includes('▲')) trend = 'down';
 
-    // 数据清洗：如果抓不到，返回 fallback 数据
-    pbr = parseFloat(pbr) || 1.0;
-    per = parseFloat(per) || 15.0;
-    yieldVal = parseFloat(yieldVal) || 2.0;
+    return { name: stockName, pbr, per, yield: yieldVal, trend };
 
-    return { pbr, per, yield: yieldVal, trend };
   } catch (error) {
-    console.error(`❌ Failed to fetch ${stockCode}: ${error.message}`);
-    // 失败时返回保守数据，防止页面崩溃
-    return { pbr: "-", per: "-", yield: "-", trend: "flat" };
+    console.error(`⚠️ Error fetching ${code}: ${error.message}`);
+    return null;
   }
 };
 
 const run = async () => {
-  console.log("🚀 Starting Real-Time Sector Scrape...");
+  console.log("🚀 Starting Individual Stock Scrape...");
   const results = [];
 
-  for (const sector of SECTOR_LEADERS) {
-    console.log(`📡 Fetching ${sector.name} (${sector.code})...`);
+  for (const [sectorCode, stocks] of Object.entries(SECTOR_TARGETS)) {
+    console.log(`\n📂 Sector ${sectorCode}...`);
     
-    const data = await fetchStockData(sector.code);
-    
-    results.push({
-      code: sector.sectorCode, // 保持业种代码一致，方便前端显示
-      name: sector.name,
-      leader: sector.code,     // 记录是哪个龙头股的数据
-      ...data
-    });
+    const stockDetails = [];
 
-    // 每次请求后休息 1.5 秒，模拟人类浏览
-    await sleep(1500);
+    for (const stockCode of stocks) {
+      const data = await fetchStockData(stockCode);
+      await sleep(2000); // 慢速抓取
+
+      if (data) {
+        console.log(`   - ${stockCode} ${data.name}: PBR ${data.pbr}`);
+        stockDetails.push({
+          code: stockCode,
+          ...data
+        });
+      }
+    }
+
+    results.push({
+      code: sectorCode,
+      name: SECTOR_NAMES[sectorCode],
+      stocks: stockDetails // 这里不再是平均值，而是数组
+    });
   }
 
-  // 保存数据
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const publicDir = path.join(__dirname, '../public');
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
 
   const filePath = path.join(publicDir, 'data.json');
   fs.writeFileSync(filePath, JSON.stringify(results, null, 2));
-  console.log(`✅ Update Complete! Data saved to ${filePath}`);
+  console.log(`✅ Data saved to ${filePath}`);
 };
 
 run();
