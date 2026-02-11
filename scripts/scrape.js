@@ -56,76 +56,55 @@ const SECTOR_NAMES = {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const fetchYahooData = async (code) => {
-  // Yahoo Finance Japan URL: https://finance.yahoo.co.jp/quote/8058.T
-  // 加上 .T 后缀
   const url = `https://finance.yahoo.co.jp/quote/${code}.T`;
   
   try {
     const { data } = await axios.get(url, {
       headers: {
-        // 伪装成真实的 Mac 浏览器，这对于 Yahoo 非常重要
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Referer': 'https://finance.yahoo.co.jp/'
       },
       timeout: 15000
     });
+    
+    // 名字提取 (使用 Cheerio)
     const $ = cheerio.load(data);
-
-    // 1. 获取名字 (Yahoo的结构通常是 h1 里的名字)
     let stockName = $('h1').text().trim() || code;
-    // 清洗名字：去除代码和后缀，例如 "8058 三菱商事" -> "三菱商事"
     stockName = stockName.replace(code, '').replace('.T', '').trim();
 
-    // 2. 暴力抓取 PBR/PER/Yield
-    // Yahoo 的页面里，数据通常在一个列表里，我们需要找到包含 "PBR" 字样的元素，然后取它的下一个兄弟元素的文本
-    let pbr = null, per = null, yieldVal = null;
+    // 🔴 核心数据提取 (使用正则表达式 - Regex Sniper)
+    // 不再依赖 DOM 结构，直接在 HTML 文本里找 "PBR...倍"
+    // Yahoo 的 HTML 里，PBR 后面一定跟着数值和 "倍" 字，而 EPS 后面是 "円"，所以不会搞混。
+    
+    const html = data;
+    
+    // 寻找 PBR (匹配示例: >PBR<... 1.23倍)
+    // [^<]*? 意思是中间可能有一些标签或空格
+    const pbrMatch = html.match(/>PBR.*?([0-9,.]+)倍/);
+    const pbr = pbrMatch ? parseFloat(pbrMatch[1].replace(/,/g, '')) : null;
 
-    // 遍历所有可能的文本容器
-    $('span, dt, th, li').each((i, el) => {
-      const text = $(el).text();
-      // 获取下一个元素的文本（通常数值就在旁边）
-      const nextText = $(el).next().text();
-      
-      // 合并文本以便搜索（有时候数值包含在同一个标签里，有时候在隔壁）
-      const combined = text + " " + nextText;
+    // 寻找 PER
+    const perMatch = html.match(/>PER.*?([0-9,.]+)倍/);
+    const per = perMatch ? parseFloat(perMatch[1].replace(/,/g, '')) : null;
 
-      // 提取数值的通用正则：匹配数字+小数点
-      const extractNum = (str) => {
-         const match = str.match(/([0-9]+\.[0-9]+|[0-9]+)/);
-         return match ? parseFloat(match[0]) : null;
-      };
+    // 寻找 利回り (匹配示例: >配当利回り<... 3.45%)
+    const yieldMatch = html.match(/>配当利回り.*?([0-9,.]+)%/);
+    const yieldVal = yieldMatch ? parseFloat(yieldMatch[1].replace(/,/g, '')) : null;
 
-      if (text.includes('PBR') && !pbr) {
-        // 优先看隔壁，隔壁没有看自己
-        pbr = extractNum(nextText) || extractNum(text);
-      }
-      if (text.includes('PER') && !per) {
-        per = extractNum(nextText) || extractNum(text);
-      }
-      if (text.includes('配当利回り') && !yieldVal) {
-        yieldVal = extractNum(nextText) || extractNum(text);
-      }
-    });
-
-    // 3. 趋势 (Yahoo 比较难抓 trend，暂时设为 flat 或者根据股价颜色)
+    // 趋势 (Yahoo 绿色是跌，红色是涨)
     let trend = 'flat';
-    // 尝试寻找股价涨跌的颜色标识
-    const htmlStr = $.html();
-    if (htmlStr.includes('priceChangeText_green')) trend = 'down'; // Yahoo 跌是绿色
-    if (htmlStr.includes('priceChangeText_red')) trend = 'up';   // Yahoo 涨是红色
+    if (html.includes('priceChangeText_green')) trend = 'down';
+    if (html.includes('priceChangeText_red')) trend = 'up';
 
     return { name: stockName, pbr, per, yield: yieldVal, trend };
 
   } catch (error) {
     console.error(`⚠️ Error Yahoo ${code}: ${error.message}`);
-    // 失败时返回 null，保持队列继续
     return null;
   }
 };
 
 const run = async () => {
-  console.log("🚀 Starting Scrape (Source: Yahoo Finance JP)...");
+  console.log("🚀 Starting Scrape (Regex Sniper Mode)...");
   const results = [];
 
   for (const [sectorCode, stocks] of Object.entries(SECTOR_TARGETS)) {
@@ -135,11 +114,12 @@ const run = async () => {
 
     for (const stockCode of stocks) {
       const data = await fetchYahooData(stockCode);
-      await sleep(1500); // 礼貌爬取，防止封IP
+      await sleep(1500); 
 
       if (data) {
+        // 打印出来确认一下
         const pbrStr = data.pbr !== null ? data.pbr : "-";
-        console.log(`   - ${stockCode} ${data.name}: PBR ${pbrStr} | PER ${data.per} | Yield ${data.yield}%`);
+        console.log(`   - ${stockCode} ${data.name}: PBR ${pbrStr}x | PER ${data.per}x | Yield ${data.yield}%`);
         stockDetails.push({ code: stockCode, ...data });
       } else {
         console.log(`   - ${stockCode}: Failed`);
