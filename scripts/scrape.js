@@ -57,6 +57,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const fetchMinkabuData = async (code) => {
   // 切换源：Minkabu (みんかぶ)
+  // Minkabu 的页面结构更稳定，且对 PBR/PER 的反爬较少
   const url = `https://minkabu.jp/stock/${code}`;
   try {
     const { data } = await axios.get(url, {
@@ -68,13 +69,11 @@ const fetchMinkabuData = async (code) => {
     });
     const $ = cheerio.load(data);
 
-    // 1. 获取股票名称 (通常在 p.md_stockBoard_stockName 或类似的结构)
-    // Minkabu 结构： <p class="md_stockBoard_stockName">ニッスイ</p>
+    // 1. 获取股票名称 (Minkabu 结构： <p class="md_stockBoard_stockName">ニッスイ</p>)
     let stockName = $('.md_stockBoard_stockName').text().trim() || code;
     
     // 2. 智能抓取数据
-    // Minkabu 的数据通常在表格中，th是标签，td是数值
-    // 我们遍历所有 th，找到对应的 td
+    // Minkabu 的数据在表格 th/td 对中。遍历 th 找标签，取下一个 td 的值。
     let pbr = null, per = null, yieldVal = null;
 
     $('th').each((i, el) => {
@@ -95,9 +94,9 @@ const fetchMinkabuData = async (code) => {
       }
     });
 
-    // 3. 趋势判断 (前日比)
+    // 3. 趋势判断
     let trend = 'flat';
-    const changeText = $('.stock_price_change').text(); // 例: +15 (+1.2%)
+    const changeText = $('.stock_price_change').text(); 
     if (changeText.includes('+')) trend = 'up';
     if (changeText.includes('-') || changeText.includes('▼')) trend = 'down';
 
@@ -105,7 +104,6 @@ const fetchMinkabuData = async (code) => {
 
   } catch (error) {
     console.error(`⚠️ Error fetching ${code} from Minkabu: ${error.message}`);
-    // 如果 Minkabu 也失败，尝试 Yahoo Finance 作为备用 (简单逻辑)
     return null; 
   }
 };
@@ -121,24 +119,16 @@ const run = async () => {
 
     for (const stockCode of stocks) {
       const data = await fetchMinkabuData(stockCode);
-      // Minkabu 比较宽松，但还是加一点延迟
-      await sleep(1500); 
+      await sleep(1500); // 礼貌爬取，防止封禁
 
       if (data) {
-        // 如果抓取失败（null），显示 -
         const pbrStr = data.pbr !== null ? data.pbr : "-";
         console.log(`   - ${stockCode} ${data.name}: PBR ${pbrStr}`);
-        
-        stockDetails.push({
-          code: stockCode,
-          ...data
-        });
+        stockDetails.push({ code: stockCode, ...data });
       } else {
         console.log(`   - ${stockCode}: Failed to fetch`);
-        // 即使失败也推入一个空对象，保持表格结构完整
         stockDetails.push({
-          code: stockCode,
-          name: stockCode, // 暂时用代码代替名字
+          code: stockCode, name: stockCode, 
           pbr: null, per: null, yield: null, trend: 'flat'
         });
       }
